@@ -2,18 +2,73 @@ from __future__ import annotations
 
 from contextlib import AsyncExitStack
 from dataclasses import replace
-from typing import Any, AsyncIterator, Dict, List
+from typing import Any, AsyncIterator, Dict, List, Literal, Tuple
 
 import pytest
 
 from chia.consensus.constants import ConsensusConstants
+from chia.consensus.cost_calculator import NPCResult
+from chia.full_node.full_node import FullNode
 from chia.rpc.wallet_rpc_client import WalletRpcClient
+from chia.types.blockchain_format.sized_bytes import bytes32
 from chia.types.peer_info import PeerInfo
 from chia.util.ints import uint32, uint64, uint128
 from chia.wallet.util.tx_config import DEFAULT_TX_CONFIG, TXConfig
 from chia.wallet.wallet_node import Balance
+from chia.wallet.wallet_state_manager import WalletStateManager
 from tests.environments.wallet import WalletEnvironment, WalletState, WalletTestFramework
 from tests.util.setup_nodes import setup_simulators_and_wallets_service
+from tests.wallet.wallet_block_tools import WalletBlockTools
+
+
+@pytest.fixture(scope="function", autouse=True)
+def block_is_current_at(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def mocked_synced(self: Any, block_is_current_at: int = 0) -> bool:
+        return await original_synced(self, block_is_current_at)
+
+    original_synced = WalletStateManager.synced
+
+    monkeypatch.setattr(WalletStateManager, "synced", mocked_synced)
+
+
+@pytest.fixture(scope="function", autouse=True)
+def ignore_block_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def validate_block_body(*args: Any, **kwargs: Any) -> Tuple[Literal[None], NPCResult]:
+        return None, args[7]
+
+    def create_wrapper(original_create: Any) -> Any:
+        async def new_create(*args: Any, **kwargs: Any) -> Any:
+            # Modify the config argument directly since it's a mutable dictionary
+            if "config" in kwargs:
+                kwargs["config"]["single_threaded"] = True
+            else:
+                args[0]["single_threaded"] = True  # Assuming config is the first positional argument
+
+            # Call the original function with modified arguments
+            full_node = await original_create(*args, **kwargs)
+            return full_node
+
+        return new_create
+
+    monkeypatch.setattr("chia.simulator.block_tools.BlockTools", WalletBlockTools)
+    monkeypatch.setattr(FullNode, "create", create_wrapper(FullNode.create))
+    monkeypatch.setattr("chia.consensus.blockchain.validate_block_body", validate_block_body)
+    monkeypatch.setattr(
+        "chia.consensus.block_header_validation.validate_unfinished_header_block", lambda *_, **__: (uint64(1), None)
+    )
+    monkeypatch.setattr(
+        "chia.wallet.wallet_blockchain.validate_finished_header_block", lambda *_, **__: (uint64(1), None)
+    )
+    monkeypatch.setattr(
+        "chia.consensus.multiprocess_validation.validate_finished_header_block", lambda *_, **__: (uint64(1), None)
+    )
+    monkeypatch.setattr(
+        "chia.consensus.multiprocess_validation.verify_and_get_quality_string", lambda *_, **__: bytes32([0] * 32)
+    )
+    monkeypatch.setattr("chia.consensus.block_record.BlockRecord.sp_total_iters", lambda *_: uint128(0))
+    monkeypatch.setattr("chia.consensus.block_record.BlockRecord.ip_sub_slot_total_iters", lambda *_: uint128(0))
+    monkeypatch.setattr("chia.consensus.make_sub_epoch_summary.calculate_sp_iters", lambda *_: uint64(0))
+    monkeypatch.setattr("chia.consensus.make_sub_epoch_summary.calculate_ip_iters", lambda *_: uint64(0))
 
 
 @pytest.fixture(scope="function", params=[True, False])
