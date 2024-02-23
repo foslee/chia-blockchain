@@ -230,7 +230,7 @@ def get_filenames(directory: Path, recursive: bool) -> List[Path]:
     all_files: List[Path] = []
     try:
         glob_function = directory.rglob if recursive else directory.glob
-        all_files = [child for child in glob_function("*.fos") if child.is_file() and not child.name.startswith("._")]
+        all_files = [child for child in glob_function("*.*") if child.is_file() and not child.name.startswith("._")]
         log.debug(f"get_filenames: {len(all_files)} files found in {directory}, recursive: {recursive}")
     except Exception as e:
         log.warning(f"Error reading directory {directory} {e}")
